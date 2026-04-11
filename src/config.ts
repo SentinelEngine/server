@@ -2,20 +2,30 @@ import { z } from 'zod';
 import 'dotenv/config';
 
 const EnvSchema = z.object({
-  NODE_ENV:           z.enum(['development', 'test', 'production']).default('development'),
-  PORT:               z.coerce.number().default(3001),
-  HOST:               z.string().default('0.0.0.0'),
-  DATABASE_URL:       z.string().url(),
-  REDIS_URL:          z.string().url().default('redis://localhost:6379'),
-  JWT_SECRET:         z.string().min(32),
-  OPENAI_API_KEY:     z.string().optional(),
-  ANTHROPIC_API_KEY:  z.string().optional(),
-  AWS_PRICING_REGION: z.string().default('us-east-1'),
-  PRICING_TTL_SECS:   z.coerce.number().default(3600),
-  MAX_FILE_SIZE_KB:   z.coerce.number().default(500),
-  RATE_LIMIT_MAX:     z.coerce.number().default(100),
-  RATE_LIMIT_WINDOW:  z.string().default('1 minute'),
-  LOG_LEVEL:          z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
+  NODE_ENV:             z.enum(['development', 'test', 'production']).default('development'),
+  PORT:                 z.coerce.number().default(3001),
+  HOST:                 z.string().default('0.0.0.0'),
+  DATABASE_URL:         z.string().url(),
+  REDIS_URL:            z.string().url().default('redis://localhost:6379'),
+  JWT_SECRET:           z.string().min(32),
+  OPENAI_API_KEY:       z.string().optional(),
+  ANTHROPIC_API_KEY:    z.string().optional(),
+  AWS_PRICING_REGION:   z.string().default('us-east-1'),
+  PRICING_TTL_SECS:     z.coerce.number().default(3600),
+  MAX_FILE_SIZE_KB:     z.coerce.number().default(500),
+  RATE_LIMIT_MAX:       z.coerce.number().default(100),
+  RATE_LIMIT_WINDOW:    z.string().default('1 minute'),
+  LOG_LEVEL:            z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
+  // ── Blockchain ─────────────────────────────────────────────────────────────
+  BLOCKCHAIN_ENABLED:   z.coerce.boolean().default(false),
+  BLOCKCHAIN_RPC_URL:   z.string().default(''),
+  WALLET_PRIVATE_KEY:   z.string().default(''),
+  CONTRACT_ADDRESS:     z.string().default(''),
+  EXPLORER_BASE_URL:    z.string().default('https://mumbai.polygonscan.com/tx'),
+  // ── Google OAuth ────────────────────────────────────────────────────────────
+  GOOGLE_CLIENT_ID:     z.string().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().default(''),
+  GOOGLE_CALLBACK_URL:  z.string().default('http://localhost:3001/auth/google/callback'),
 });
 
 export const config = EnvSchema.parse(process.env);

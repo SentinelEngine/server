@@ -10,9 +10,12 @@ import { addRequestId }   from './middleware/request-id.js';
 import { authenticate }   from './middleware/auth.js';
 import { analyzeRoutes }  from './routes/analyze.js';
 import { authRoutes }     from './routes/auth.js';
+import { googleAuthRoutes } from './routes/googleAuth.js';
 import { pricingRoutes }  from './routes/pricing.js';
 import { historyRoutes }  from './routes/history.js';
 import { healthRoutes }   from './routes/health.js';
+import { reportRoutes }   from './routes/report.js';
+import { prDiffRoutes }   from './routes/pr-diff.js';
 
 // ─── Build app ───────────────────────────────────────────────────────────────
 
@@ -67,9 +70,12 @@ app.setErrorHandler(errorHandler);
 
 await app.register(healthRoutes);
 await app.register(authRoutes);
+await app.register(googleAuthRoutes);
 await app.register(analyzeRoutes);
 await app.register(pricingRoutes, { prefix: '/pricing' });
 await app.register(historyRoutes, { prefix: '/history' });
+await app.register(reportRoutes);
+await app.register(prDiffRoutes);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 

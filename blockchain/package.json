@@ -1,0 +1,22 @@
+{
+  "name": "cloudcostlens-blockchain",
+  "version": "1.0.0",
+  "description": "Hardhat project for CostAudit smart contract",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy:local": "hardhat run scripts/deploy.cjs --network localhost",
+    "deploy:mumbai": "hardhat run scripts/deploy.cjs --network mumbai",
+    "node": "hardhat node",
+    "test": "hardhat test"
+  },
+  "dependencies": {
+    "cloud-cost-analyzer-backend": "file:.."
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

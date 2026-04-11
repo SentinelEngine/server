@@ -13,6 +13,8 @@ import { config } from '../config.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
 
+
+
 async function run(): Promise<void> {
   const pool = new Pool({ connectionString: config.DATABASE_URL });
 
