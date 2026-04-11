@@ -1,0 +1,22 @@
+# ── Stage 1: Install production deps ──────────────────────────────────────────
+FROM node:20-alpine AS base
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+# ── Stage 2: Build TypeScript ──────────────────────────────────────────────────
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# ── Stage 3: Minimal runtime image ────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+WORKDIR /app
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY migrations ./migrations
+EXPOSE 3001
+CMD ["node", "dist/index.js"]

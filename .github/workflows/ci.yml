@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER:     ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB:       costanalyzer_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV:     test
+      DATABASE_URL: postgres://ci:ci@localhost:5432/costanalyzer_test
+      REDIS_URL:    redis://localhost:6379
+      JWT_SECRET:   ci_secret_key_at_least_32_chars_long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Run migrations
+        run: npm run migrate
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
