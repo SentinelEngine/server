@@ -6,14 +6,15 @@ services:
       DATABASE_URL: postgres://dev:dev@db:5432/costanalyzer
       REDIS_URL:    redis://redis:6379
       JWT_SECRET:   change_me_at_least_32_chars_long!!
-      NODE_ENV:     development
+      NODE_ENV:     production
       LOG_LEVEL:    debug
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
     depends_on:
       db:    { condition: service_healthy }
       redis: { condition: service_healthy }
-    volumes:
-      - .:/app
-      - /app/node_modules
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
