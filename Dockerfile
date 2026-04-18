@@ -19,4 +19,4 @@ COPY --from=base /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 EXPOSE 3001
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]

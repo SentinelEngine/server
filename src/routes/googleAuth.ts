@@ -4,7 +4,7 @@
  * Flow:
  *   GET /auth/google           → redirects browser to Google consent screen
  *   GET /auth/google/callback  → exchanges code → upserts user → issues JWT
- *                               → redirects to vscode://cloudcostgauge.cloudcost-gauge/auth?token=...
+ *                               → redirects to vscode://cloudcostgauge.cloud-cost-gauge/auth?token=...
  *
  * No Passport.js dependency — uses googleapis directly.
  */
@@ -61,7 +61,7 @@ export const googleAuthRoutes: FastifyPluginAsync = async (fastify) => {
       if (error || !code) {
         fastify.log.warn({ error }, 'Google OAuth denied or cancelled');
         return reply.redirect(
-          `vscode://CloudCostGuard.cloudcost-guard/auth?error=${encodeURIComponent(error ?? 'access_denied')}`,
+          `vscode://cloudcostguard.cloud-cost-guard/auth?error=${encodeURIComponent(error ?? 'access_denied')}`,
         );
       }
 
@@ -98,6 +98,10 @@ export const googleAuthRoutes: FastifyPluginAsync = async (fastify) => {
           })
           .returning();
 
+        if (!user) {
+          throw new Error('Failed to upsert user record');
+        }
+
         // Sign a JWT with the persistent user ID
         const jwtToken = fastify.jwt.sign(
           {
@@ -112,13 +116,14 @@ export const googleAuthRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.log.info({ userId: user.id, email: user.email }, 'Google OAuth success');
 
         // Redirect back to VS Code extension via deep link
-        const vsCodeUri = `vscode://CloudCostGuard.cloudcost-guard/auth?token=${encodeURIComponent(jwtToken)}&email=${encodeURIComponent(user.email)}&name=${encodeURIComponent(user.displayName ?? '')}`;
+        const vsCodeUri = `vscode://cloudcostguard.cloud-cost-guard/auth?token=${encodeURIComponent(jwtToken)}&email=${encodeURIComponent(user.email)}&name=${encodeURIComponent(user.displayName ?? '')}`;
         return reply.redirect(vsCodeUri);
 
       } catch (err: any) {
-        fastify.log.error({ err: err.message }, 'Google OAuth callback failed');
+        const errMsg = err instanceof Error ? err.message : String(err);
+        fastify.log.error({ err: err, errMsg }, 'Google OAuth callback failed');
         return reply.redirect(
-          `vscode://CloudCostGuard.cloudcost-guard/auth?error=${encodeURIComponent('auth_failed')}`,
+          `vscode://cloudcostguard.cloud-cost-guard/auth?error=${encodeURIComponent(`auth_failed: ${errMsg}`)}`,
         );
       }
     },
