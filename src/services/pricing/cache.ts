@@ -6,11 +6,13 @@ let _redis: Redis | null = null;
 export function getRedis(): Redis {
   if (!_redis) {
     _redis = new Redis(config.REDIS_URL, {
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: 0,
       enableReadyCheck:     true,
       lazyConnect:          true,
+      retryStrategy:        () => null // Stop retrying and don't spam reconnects
     });
-    _redis.on('error', err => console.error('[redis] Connection error:', err));
+    // Suppress the giant ECONNREFUSED error dump
+    _redis.on('error', () => {});
   }
   return _redis;
 }
