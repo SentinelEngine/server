@@ -16,6 +16,8 @@ import { historyRoutes }  from './routes/history.js';
 import { healthRoutes }   from './routes/health.js';
 import { reportRoutes }   from './routes/report.js';
 import { prDiffRoutes }   from './routes/pr-diff.js';
+import { webhookRoutes }  from './routes/webhook.js';
+import { botRoutes }      from './routes/bot.js';
 
 // ─── Build app ───────────────────────────────────────────────────────────────
 
@@ -76,6 +78,8 @@ await app.register(pricingRoutes, { prefix: '/pricing' });
 await app.register(historyRoutes, { prefix: '/history' });
 await app.register(reportRoutes);
 await app.register(prDiffRoutes);
+await app.register(webhookRoutes);
+await app.register(botRoutes);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
