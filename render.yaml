@@ -1,6 +1,6 @@
 services:
   # 1. PostgreSQL Database
-  - type: pgo
+  - type: pg
     name: cloudgauge-db
     plan: free
     databaseName: costanalyzer
