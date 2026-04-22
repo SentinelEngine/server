@@ -1,0 +1,65 @@
+services:
+  # 1. PostgreSQL Database
+  - type: pgo
+    name: cloudgauge-db
+    plan: free
+    databaseName: costanalyzer
+    user: dev
+
+  # 2. Redis Instance
+  - type: redis
+    name: cloudgauge-redis
+    plan: free
+    ipAllowList: [] # Allows connections from other Render services
+
+  # 3. Fastify Web Service (Backend)
+  - type: web
+    name: cloudgauge-server
+    env: node
+    plan: free
+    rootDir: . # Assuming this file is placed in the server repository root
+    buildCommand: npm install && npm run build
+    # This preDeploy command ensures the database is migrated before the app starts, preventing crashes!
+    # If the migration fails, the deploy stops, saving your live app from crashing.
+    preDeployCommand: npm run migrate
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cloudgauge-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cloudgauge-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true # Render will automatically generate a secure 256-bit secret string for you
+      - key: GOOGLE_CLIENT_ID
+        sync: false # You must add this manually in the Render dashboard
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false # You must add this manually in the Render dashboard
+      - key: GOOGLE_CALLBACK_URL
+        sync: false # Set this to https://<your-render-url>/auth/google/callback manually
+      - key: GITHUB_TOKEN
+        sync: false # Add manually
+      - key: OPENAI_API_KEY
+        sync: false # Add manually
+      - key: ANTHROPIC_API_KEY
+        sync: false # Add manually
+      - key: AWS_PRICING_REGION
+        value: us-east-1
+      - key: PRICING_TTL_SECS
+        value: 3600
+      - key: MAX_FILE_SIZE_KB
+        value: 500
+      - key: RATE_LIMIT_MAX
+        value: 100
+      - key: RATE_LIMIT_WINDOW
+        value: 1 minute
+      - key: LOG_LEVEL
+        value: info
