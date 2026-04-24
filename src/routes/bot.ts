@@ -46,15 +46,18 @@ function estimateCents(
   callsPerMonth: number, inputTokens: number, outputTokens: number,
   storageGB?: number, operation?: string,
 ): number {
-  if (service === 'openai' && model) {
-    const p = OPENAI_PRICING[model] ?? OPENAI_PRICING['gpt-4o'];
+  // Always resolve model to a known key — never let undefined skip the block
+  if (service === 'openai') {
+    const m = model && OPENAI_PRICING[model] ? model : 'gpt-4o';
+    const p = OPENAI_PRICING[m];
     return Math.round(
       (inputTokens  / 1_000) * p.input  * callsPerMonth * 100 +
       (outputTokens / 1_000) * p.output * callsPerMonth * 100,
     );
   }
-  if (service === 'anthropic' && model) {
-    const p = ANTHROPIC_PRICING[model] ?? ANTHROPIC_PRICING['claude-3-5-sonnet'];
+  if (service === 'anthropic') {
+    const m = model && ANTHROPIC_PRICING[model] ? model : 'claude-3-5-sonnet';
+    const p = ANTHROPIC_PRICING[m];
     return Math.round(
       (inputTokens  / 1_000) * p.input  * callsPerMonth * 100 +
       (outputTokens / 1_000) * p.output * callsPerMonth * 100,
@@ -151,6 +154,7 @@ export async function botRoutes(app: FastifyInstance) {
           d.storageGB, d.operation,
         );
         fileHeadCents += cents;
+        debugLines.push(`  [${d.service}] model=${d.model ?? 'undefined'} calls=${d.callsPerMonth ?? 10_000} → $${(cents/100).toFixed(2)}/mo`);
         detectionRows.push({
           service:    d.service,
           model:      d.model,
@@ -230,6 +234,10 @@ export async function botRoutes(app: FastifyInstance) {
       }
     } else {
       md += `*No cloud API calls detected in the changed files.*\n`;
+    }
+
+    // Always show debug info to help diagnose issues
+    if (debugLines.length > 0) {
       md += `\n<details><summary>🔍 Debug Info</summary>\n\n\`\`\`\n${debugLines.join('\n')}\n\`\`\`\n</details>\n`;
     }
 
