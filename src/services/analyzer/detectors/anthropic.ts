@@ -1,13 +1,43 @@
 import type { DetectionMatch, DetectorFn } from '../types.js';
 
 const MODEL_ALIASES: Record<string, string> = {
-  'claude-3-5-sonnet': 'claude-3-5-sonnet',
-  'claude-3-opus':     'claude-3-opus',
-  'claude-3-sonnet':   'claude-3-sonnet',
-  'claude-3-haiku':    'claude-3-haiku',
-  'claude-2':          'claude-2',
-  'claude-instant':    'claude-instant',
+  // Short names
+  'claude-3-5-sonnet':      'claude-3-5-sonnet',
+  'claude-3-opus':          'claude-3-opus',
+  'claude-3-sonnet':        'claude-3-sonnet',
+  'claude-3-haiku':         'claude-3-haiku',
+  'claude-2':               'claude-2',
+  'claude-instant':         'claude-instant',
+  // Full versioned names
+  'claude-3-opus-20240229':    'claude-3-opus',
+  'claude-3-sonnet-20240229':  'claude-3-sonnet',
+  'claude-3-haiku-20240307':   'claude-3-haiku',
+  'claude-3-5-sonnet-20240620':'claude-3-5-sonnet',
 };
+
+/** Resolve raw model string (full versioned or short) to a canonical alias. */
+function resolveAnthropicModel(raw: string | null): string {
+  if (!raw) return 'claude-3-5-sonnet';
+  const lower = raw.toLowerCase();
+  if (MODEL_ALIASES[lower]) return MODEL_ALIASES[lower];
+  // Partial match — prefer longest key that is a substring of raw
+  const match = Object.keys(MODEL_ALIASES)
+    .filter(k => lower.includes(k))
+    .sort((a, b) => b.length - a.length)[0];
+  return match ? MODEL_ALIASES[match] : 'claude-3-5-sonnet';
+}
+
+/** Returns true if this AST node is nested inside a for/while/forEach loop. */
+function isInsideLoop(_node: any, ancestors: any[]): boolean {
+  return ancestors.some(a =>
+    a.type === 'ForStatement' ||
+    a.type === 'ForInStatement' ||
+    a.type === 'ForOfStatement' ||
+    a.type === 'WhileStatement' ||
+    a.type === 'DoWhileStatement' ||
+    (a.type === 'CallExpression' && /forEach|map|reduce|filter/.test(a.callee?.property?.name ?? '')),
+  );
+}
 
 /**
  * Detects Anthropic SDK calls in ASTs.
@@ -16,7 +46,7 @@ const MODEL_ALIASES: Record<string, string> = {
 export const anthropicDetector: DetectorFn = (ast, code) => {
   const matches: DetectionMatch[] = [];
 
-  function walk(node: any): void {
+  function walk(node: any, ancestors: any[] = []): void {
     if (
       node.type === 'CallExpression' &&
       node.callee?.type === 'MemberExpression' &&
@@ -29,20 +59,17 @@ export const anthropicDetector: DetectorFn = (ast, code) => {
         /anthropic\.(complete|createMessage)/i.test(callStr);
 
       if (isAnthropic) {
-        const model  = extractStringArg(node.arguments, 'model');
-        const maxTok = extractNumberArg(node.arguments, 'max_tokens') ?? 1024;
-        const rawModel = model?.toLowerCase() ?? '';
-        const resolvedModel =
-          Object.keys(MODEL_ALIASES).find(k => rawModel.includes(k)) ??
-          'claude-3-5-sonnet';
+        const model   = extractStringArg(node.arguments, 'model');
+        const maxTok  = extractNumberArg(node.arguments, 'max_tokens') ?? 1_024;
+        const inLoop  = isInsideLoop(node, ancestors);
 
         matches.push({
           service:       'anthropic',
-          model:         resolvedModel,
+          model:         resolveAnthropicModel(model),
           operation:     'messages.create',
           inputTokens:   500,
           outputTokens:  maxTok,
-          callsPerMonth: 10_000,
+          callsPerMonth: inLoop ? 50_000 : 10_000,
           line:          node.loc.start.line,
           column:        node.loc.start.column,
           snippet:       callStr.slice(0, 80),
@@ -50,11 +77,12 @@ export const anthropicDetector: DetectorFn = (ast, code) => {
       }
     }
 
+    const nextAncestors = [...ancestors, node];
     for (const key of Object.keys(node)) {
       const child = (node as any)[key];
       if (child && typeof child === 'object') {
-        if (Array.isArray(child)) child.forEach((c: any) => c?.type && walk(c));
-        else if (child.type) walk(child);
+        if (Array.isArray(child)) child.forEach((c: any) => c?.type && walk(c, nextAncestors));
+        else if (child.type) walk(child, nextAncestors);
       }
     }
   }
