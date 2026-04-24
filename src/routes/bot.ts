@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { Octokit } from '@octokit/rest';
-import { config } from '../config.js';
 import { computeCostDiff } from '../services/diff/cost-diff.js';
 
 interface BotPayload {
@@ -15,25 +14,32 @@ interface BotPayload {
 function getLanguageFromFilename(filename: string): string | null {
   if (filename.endsWith('.ts') || filename.endsWith('.tsx')) return 'typescript';
   if (filename.endsWith('.js') || filename.endsWith('.jsx')) return 'javascript';
-  if (filename.endsWith('.py')) return 'python';
-  if (filename.endsWith('.go')) return 'go';
   return null;
 }
 
 export async function botRoutes(app: FastifyInstance) {
   app.post('/api/bot/analyze-pr', async (request: FastifyRequest<{ Body: BotPayload }>, reply) => {
-    const { owner, repo, prNumber, baseSha, headSha, files } = request.body;
+    const { owner, repo, baseSha, headSha, files } = request.body;
 
-    // Use the backend server's GitHub token for fetching raw code
     const token = process.env.GITHUB_TOKEN || '';
     const octokit = new Octokit({ auth: token });
 
-    let totalBaseCost = 0;
-    let totalHeadCost = 0;
-    const fileReports: any[] = [];
+    let totalBaseCost  = 0;
+    let totalHeadCost  = 0;
+    let inLoop         = 0;
+    let handler        = 0;
+    const fetchErrors: string[] = [];
 
-    let inLoop = 0;
-    let handler = 0;
+    // Per-detection breakdown rows: one row per AST detection in HEAD
+    interface DetectionRow {
+      service:      string;
+      model?:       string;
+      snippet:      string;
+      headCents:    number;  // absolute monthly cost in HEAD
+      deltaCents:   number;  // change introduced by this PR
+      inLoop:       boolean;
+    }
+    const detectionRows: DetectionRow[] = [];
 
     // --- DYNAMIC AST ANALYSIS ---
     for (const file of files) {
@@ -41,6 +47,7 @@ export async function botRoutes(app: FastifyInstance) {
       const language = getLanguageFromFilename(file.filename);
       if (!language) continue;
 
+      // Fetch BASE content (what was there before the PR)
       let baseContent = '';
       if (file.status !== 'added') {
         try {
@@ -48,126 +55,134 @@ export async function botRoutes(app: FastifyInstance) {
           if ('content' in (data as any) && !Array.isArray(data)) {
             baseContent = Buffer.from((data as any).content, 'base64').toString('utf-8');
           }
-        } catch (e) { }
+        } catch (e: any) {
+          // Non-fatal: treat as empty (new file scenario)
+          fetchErrors.push(`[base] ${file.filename}: ${e.message}`);
+        }
       }
 
+      // Fetch HEAD content (what the PR introduces)
       let headContent = '';
       try {
         const { data } = await octokit.rest.repos.getContent({ owner, repo, path: file.filename, ref: headSha });
         if ('content' in (data as any) && !Array.isArray(data)) {
           headContent = Buffer.from((data as any).content, 'base64').toString('utf-8');
         }
-      } catch (e) { continue; }
-
-      // Check for loops to trigger Criticality
-      if (headContent.includes('for (') || headContent.includes('while (')) {
-        inLoop += 1;
+      } catch (e: any) {
+        fetchErrors.push(`[head] ${file.filename}: ${e.message}`);
+        continue; // Cannot analyze — skip this file
       }
 
-      // REAL AST COST CALCULATION
+      if (!headContent.trim()) continue;
+
+      // Detect loop patterns in head file
+      const fileHasLoop = /for\s*\(|while\s*\(|\.forEach\s*\(|\.map\s*\(/.test(headContent);
+      if (fileHasLoop) inLoop += 1;
+
+      // Run AST cost diff
       const diffResult = await computeCostDiff(baseContent, headContent, language);
       totalBaseCost += diffResult.baseTotal;
       totalHeadCost += diffResult.headTotal;
 
-      // Extract snippet
-      let snippet = 'await client.chat.completions.create(...)';
-      const lines = headContent.split('\n');
-      const apiLine = lines.find(l => 
-        l.includes('openai') || l.includes('chat.completions') || 
-        l.includes('aws') || l.includes('new Lambda') || l.includes('InvokeCommand')
-      );
-      if (apiLine) snippet = apiLine.trim();
-
-      if (diffResult.deltaCents !== 0 || diffResult.addedServices.length > 0 || diffResult.removedServices.length > 0) {
-        // Pick the most informative snippet: prefer AST-extracted snippets, then fall back to line scan
-        const astSnippet = diffResult.headLines[0]?.snippet || apiLine?.trim() || 'await client.chat.completions.create(...)';
-
-        fileReports.push({
-          filename: file.filename,
-          deltaCents: diffResult.deltaCents,
-          added: diffResult.addedServices,
-          removed: diffResult.removedServices,
-          models: diffResult.headLines,   // real per-detection service+model data
-          snippet: astSnippet,
-        });
+      // ── Key fix: Report ALL detections in HEAD (not just services that changed) ──
+      // headLines contains every cloud API call found in the PR's version of the file.
+      if (diffResult.headLines.length > 0) {
         handler += 1;
+
+        // Compute per-detection cost delta: headCents proportional share of total delta
+        const totalHeadFile  = diffResult.headTotal  || 1;
+        const fileDelta      = diffResult.deltaCents;
+
+        for (const line of diffResult.headLines) {
+          const share      = line.monthlyCents / totalHeadFile;
+          const lineDelta  = Math.round(fileDelta * share);
+
+          detectionRows.push({
+            service:   line.service,
+            model:     line.model,
+            snippet:   line.snippet,
+            headCents: line.monthlyCents,
+            deltaCents: lineDelta,
+            inLoop:    fileHasLoop,
+          });
+        }
       }
     }
 
-    // If no cloud cost patterns were detected, report a clean bill of health
-    // (no fake fallback — real results only)
+    // ── Build markdown report ──────────────────────────────────────────────────
 
-    const totalDelta = totalHeadCost - totalBaseCost;
-    const formatDollar = (cents: number) => `$${(Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-    const sign = totalDelta > 0 ? '+' : totalDelta < 0 ? '-' : '';
+    const totalDelta   = totalHeadCost - totalBaseCost;
+    const fmt          = (cents: number) =>
+      `$${(Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+    const sign         = (cents: number) => cents > 0 ? '+' : cents < 0 ? '-' : '';
 
-    // Code Quality Billing Criticality
-    let qualityStatement = "";
-    let criticalityBadge = "**Criticality: Info**";
+    // Criticality
+    let criticalityBadge  = '🟢 **Criticality: Low**';
+    let qualityStatement  = '';
 
     if (inLoop > 0) {
-      qualityStatement = "\n> **CRITICAL CODE QUALITY WARNING:** Cloud API calls detected inside a loop. This is an anti-pattern that causes exponentially multiplying cloud costs. Consider batching requests or pulling the API call outside the loop.";
-      criticalityBadge = "**🔴 Criticality: Major**";
-    } else if (totalDelta > 5000) {
-      qualityStatement = "\n> **NOTICE:** This PR introduces significant new cloud infrastructure costs. Please ensure these additions align with your current billing budget.";
-      criticalityBadge = "**🟡 Criticality: Minor**";
-    } else {
-      criticalityBadge = "**🟢 Criticality: Low**";
+      criticalityBadge = '🔴 **Criticality: Major**';
+      qualityStatement = '\n> ⚠️ **CRITICAL:** Cloud API calls detected inside a loop — costs scale with every iteration. Consider batching or moving calls outside the loop.\n';
+    } else if (totalHeadCost > 5_000) {
+      criticalityBadge = '🟡 **Criticality: Minor**';
+      qualityStatement = '\n> 💡 **NOTICE:** Significant cloud costs detected in changed files. Ensure these align with your budget.\n';
     }
 
+    // Unique service count
+    const uniqueServices = [...new Set(detectionRows.map(r => r.service))];
+
     let markdown = `## 📊 CloudGauge Cost Impact Analysis\n\n`;
+
+    // ── Headline numbers ──
     markdown += `### 💰 ESTIMATED MONTHLY COST DELTA\n`;
-    markdown += `# **${sign}${formatDollar(totalDelta)}/mo**\n`;
+    markdown += `# **${sign(totalDelta)}${fmt(totalDelta)}/mo**\n`;
     markdown += `${criticalityBadge}\n\n`;
-    markdown += `*Detected ${fileReports.length} cost-impacting pattern(s) across ${fileReports.length} service(s).*\n`;
-    markdown += `${qualityStatement}\n\n`;
+    markdown += `> Total cloud cost **in changed files**: **${fmt(totalHeadCost)}/mo**`;
+    if (totalBaseCost > 0) markdown += ` *(was ${fmt(totalBaseCost)}/mo before this PR)*`;
+    markdown += `\n\n`;
+    markdown += `*Detected **${detectionRows.length}** cloud API call(s) across **${uniqueServices.length}** service(s).*\n`;
+    markdown += qualityStatement + '\n';
     markdown += `---\n\n`;
+
+    // ── Execution context table ──
     markdown += `### ⚙️ EXECUTION CONTEXT IMPACT\n`;
     markdown += `| 🔄 In Loop | 🌐 Handler | ⏱️ Scheduled | 📦 Batch | 📌 Direct |\n`;
     markdown += `|:---:|:---:|:---:|:---:|:---:|\n`;
     markdown += `| **${inLoop}**<br>^(High Impact)^ | **${handler}**<br>^(Per Request)^ | **0**<br>^(Recurring)^ | **0**<br>^(Concurrent)^ | **0**<br>^(Baseline)^ |\n\n`;
     markdown += `---\n\n`;
 
-    if (fileReports.length > 0) {
+    // ── Per-detection cost breakdown ──
+    if (detectionRows.length > 0) {
       markdown += `### 📋 COST BREAKDOWN\n`;
-      markdown += `| Service / Model | Detected Code Snippet | Monthly Delta |\n`;
-      markdown += `|:---|:---|---:|\n`;
-      for (const report of fileReports) {
-        const sgn = report.deltaCents > 0 ? '+' : report.deltaCents < 0 ? '-' : '';
-        const snippet = report.snippet || 'await client.chat.completions.create(...)';
+      markdown += `| Service / Model | Detected Snippet | Est. Cost/mo | PR Delta |\n`;
+      markdown += `|:---|:---|---:|---:|\n`;
 
-        // Build a precise service label from the actual detected services + models
-        let serviceName: string;
-        if (report.models && report.models.length > 0) {
-          // Use actual model names returned by the AST diff engine
-          serviceName = report.models
-            .map((m: { service: string; model?: string }) =>
-              m.model ? `**${m.service}** \`${m.model}\`` : `**${m.service}**`
-            )
-            .join(', ');
-        } else if (report.added.includes('openai')) {
-          serviceName = '**OpenAI**';
-        } else if (report.added.includes('anthropic')) {
-          serviceName = '**Anthropic**';
-        } else if (report.added.includes('aws-lambda') || report.added.includes('aws')) {
-          serviceName = '**AWS Lambda**';
-        } else if (report.added.includes('s3')) {
-          serviceName = '**AWS S3**';
-        } else {
-          serviceName = report.added.length ? `**${report.added.join(', ')}**` : '**Unknown**';
-        }
+      for (const row of detectionRows) {
+        const serviceLabel = row.model
+          ? `**${row.service}** \`${row.model}\``
+          : `**${row.service}**`;
+        const loopBadge  = row.inLoop ? ' 🔄' : '';
+        const deltaStr   = row.deltaCents !== 0
+          ? `**${sign(row.deltaCents)}${fmt(row.deltaCents)}/mo**`
+          : `*(existing)*`;
 
-        markdown += `| ${serviceName} | \`${snippet}\` | **${sgn}${formatDollar(report.deltaCents)}/mo** |\n`;
+        markdown += `| ${serviceLabel}${loopBadge} | \`${row.snippet.slice(0, 70)}\` | **${fmt(row.headCents)}/mo** | ${deltaStr} |\n`;
       }
     } else {
-      markdown += `*No cost-impacting patterns detected in this PR.*\n`;
+      markdown += `*No cloud API calls detected in the changed files.*\n`;
+
+      // Surface fetch errors if that's why we got nothing
+      if (fetchErrors.length > 0) {
+        markdown += `\n> ⚠️ **Note:** Some files could not be fetched (GITHUB_TOKEN may lack repo read access):\n`;
+        for (const e of fetchErrors) markdown += `> - \`${e}\`\n`;
+      }
     }
 
     markdown += `\n\n> *Powered by SentinelEngine CodeReview Bot.*`;
 
     return reply.send({
       markdown,
-      totalDeltaCents: totalDelta
+      totalDeltaCents: totalDelta,
     });
   });
 }
