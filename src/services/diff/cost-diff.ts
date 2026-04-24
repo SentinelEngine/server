@@ -11,6 +11,8 @@ export interface CostDiffResult {
   removedServices: string[];
   addedModels:     string[];
   removedModels:   string[];
+  /** Per-detection lines in the HEAD with service, model, and snippet info */
+  headLines:       { service: string; model?: string; snippet: string; monthlyCents: number }[];
 }
 
 /**
@@ -57,5 +59,6 @@ export async function computeCostDiff(
     removedServices: [...baseServices].filter(s => !headServices.has(s)),
     addedModels:     [...headModels].filter(m => !baseModels.has(m)),
     removedModels:   [...baseModels].filter(m => !headModels.has(m)),
+    headLines:       headR.lines.map(l => ({ service: l.service, model: l.model, snippet: l.snippet, monthlyCents: l.monthlyCents })),
   };
 }

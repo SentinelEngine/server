@@ -79,33 +79,23 @@ export async function botRoutes(app: FastifyInstance) {
       if (apiLine) snippet = apiLine.trim();
 
       if (diffResult.deltaCents !== 0 || diffResult.addedServices.length > 0 || diffResult.removedServices.length > 0) {
+        // Pick the most informative snippet: prefer AST-extracted snippets, then fall back to line scan
+        const astSnippet = diffResult.headLines[0]?.snippet || apiLine?.trim() || 'await client.chat.completions.create(...)';
+
         fileReports.push({
           filename: file.filename,
           deltaCents: diffResult.deltaCents,
           added: diffResult.addedServices,
           removed: diffResult.removedServices,
-          snippet: snippet
+          models: diffResult.headLines,   // real per-detection service+model data
+          snippet: astSnippet,
         });
         handler += 1;
       }
     }
 
-    // --- HACKATHON DEMO SAFETY NET ---
-    // If the user's PR didn't actually contain any OpenAI/AWS code, we inject a demo payload
-    // so that their live presentation to the judges still looks amazing.
-    if (totalHeadCost === 0 && fileReports.length === 0) {
-      inLoop = 1;
-      handler = 1;
-      totalBaseCost = 0;
-      totalHeadCost = 75000;
-      fileReports.push({
-        filename: files[0]?.filename || 'src/app.js',
-        deltaCents: 75000,
-        added: ['openai'],
-        removed: [],
-        snippet: 'await openai.chat.completions.create({ model: "gpt-4o", messages })'
-      });
-    }
+    // If no cloud cost patterns were detected, report a clean bill of health
+    // (no fake fallback — real results only)
 
     const totalDelta = totalHeadCost - totalBaseCost;
     const formatDollar = (cents: number) => `$${(Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
@@ -144,17 +134,27 @@ export async function botRoutes(app: FastifyInstance) {
       markdown += `|:---|:---|---:|\n`;
       for (const report of fileReports) {
         const sgn = report.deltaCents > 0 ? '+' : report.deltaCents < 0 ? '-' : '';
-        const changes = [];
-        if (report.added.length) changes.push(`+ ${report.added.join(', ')}`);
-        if (report.removed.length) changes.push(`- ${report.removed.join(', ')}`);
+        const snippet = report.snippet || 'await client.chat.completions.create(...)';
 
-        let serviceName = changes.join(', ');
-        let snippet = report.snippet || 'await client.chat.completions.create(...)';
-        
-        if (serviceName.includes('openai') || report.added.includes('openai')) {
-          serviceName = '**OpenAI** `gpt-4o`';
-        } else if (serviceName.includes('aws') || report.added.includes('aws')) {
-          serviceName = '**AWS** `lambda`';
+        // Build a precise service label from the actual detected services + models
+        let serviceName: string;
+        if (report.models && report.models.length > 0) {
+          // Use actual model names returned by the AST diff engine
+          serviceName = report.models
+            .map((m: { service: string; model?: string }) =>
+              m.model ? `**${m.service}** \`${m.model}\`` : `**${m.service}**`
+            )
+            .join(', ');
+        } else if (report.added.includes('openai')) {
+          serviceName = '**OpenAI**';
+        } else if (report.added.includes('anthropic')) {
+          serviceName = '**Anthropic**';
+        } else if (report.added.includes('aws-lambda') || report.added.includes('aws')) {
+          serviceName = '**AWS Lambda**';
+        } else if (report.added.includes('s3')) {
+          serviceName = '**AWS S3**';
+        } else {
+          serviceName = report.added.length ? `**${report.added.join(', ')}**` : '**Unknown**';
         }
 
         markdown += `| ${serviceName} | \`${snippet}\` | **${sgn}${formatDollar(report.deltaCents)}/mo** |\n`;
